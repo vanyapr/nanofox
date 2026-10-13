@@ -1,0 +1,9 @@
+.DS_Store
+node_modules/
+test-results/
+internal/
+private/
+macaroni/
+.macaroni/
+memory/
+.memory/

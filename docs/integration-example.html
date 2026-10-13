@@ -1,0 +1,36 @@
+<!doctype html>
+<!--
+  Illustrative host integration. Do not paste live IDs here. Replace the old
+  renderer for precisely one approved inline slot; do not run both paths.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <script src="/existing/yandex-context-loader.js" async></script>
+    <script src="/js/nanofox.js" defer></script>
+  </head>
+  <body>
+    <div id="legacy-article-container" data-nanofox="article"></div>
+    <script>
+      document.addEventListener('DOMContentLoaded', function () {
+        'use strict';
+        var slot = document.querySelector('[data-nanofox="article"]');
+        function legacyRender() {
+          window.yaContextCb = window.yaContextCb || [];
+          window.yaContextCb.push(function () {
+            // Keep the real pre-existing ordinary inline block configuration.
+            window.Ya.Context.AdvManager.render({
+              blockId: 'REAL_EXISTING_BLOCK_ID',
+              renderTo: 'legacy-article-container'
+            });
+          });
+        }
+        if (window.NanoFox && window.NanoFox.canOwn(slot)) {
+          window.NanoFox.refresh(slot);
+        } else {
+          legacyRender();
+        }
+      });
+    </script>
+  </body>
+</html>
