@@ -36,13 +36,23 @@ class Element extends EventTarget {
     this.textContent = '';
   }
   appendChild(child) { child.parentNode = this; this.children.push(child); return child; }
+  removeChild(child) {
+    this.children = this.children.filter((item) => item !== child);
+    child.parentNode = null;
+    return child;
+  }
   remove() {
     if (this.parentNode) this.parentNode.children = this.parentNode.children.filter((child) => child !== this);
     this.parentNode = null;
   }
   getAttribute(name) { return Object.prototype.hasOwnProperty.call(this.attrs, name) ? this.attrs[name] : null; }
   setAttribute(name, value) { this.attrs[name] = String(value); }
-  matches(selector) { return selector === '[data-nanofox]' && this.getAttribute('data-nanofox') !== null; }
+  matches(selector) {
+    if (selector === '[data-nanofox]') return this.getAttribute('data-nanofox') !== null;
+    return selector === '.lazy-ad[data-block-id]' &&
+      /(?:^|\s)lazy-ad(?:\s|$)/.test(this.getAttribute('class') || '') &&
+      this.getAttribute('data-block-id') !== null;
+  }
   querySelectorAll(selector) {
     const found = [];
     const visit = (node) => {
@@ -63,7 +73,7 @@ class Document extends EventTarget {
     this.documentElement = { contains: (target) => this.contains(target) };
   }
   createElement(tagName) { return new Element(tagName); }
-  querySelectorAll(selector) { return selector === '[data-nanofox]' ? this.slots : []; }
+  querySelectorAll(selector) { return this.slots.filter((slot) => slot.matches(selector)); }
   contains(target) {
     const visit = (node) => node === target || node.children.some(visit);
     return this.slots.some(visit);
@@ -148,11 +158,13 @@ function baseConfig(overrides = {}) {
 function boot({ config = baseConfig(), slots = [new Element('div', { 'data-nanofox': 'article' })],
   hostname = 'example.test', storage = new MemoryStorage(), random = () => 0.9,
   render = null, withYandex = true, yandexQueue = null, ym = undefined,
-  withIntersectionObserver = true } = {}) {
+  withIntersectionObserver = true, renderWidget = null } = {}) {
   const document = new Document(slots);
   const callbacks = [];
   const renders = [];
+  const widgetRenders = [];
   const defaultRender = (options, callback) => { renders.push(options); callbacks.push(callback); };
+  const defaultWidget = (options) => { widgetRenders.push(options); };
   const sandbox = {
     document,
     location: { hostname },
@@ -169,10 +181,13 @@ function boot({ config = baseConfig(), slots = [new Element('div', { 'data-nanof
   if (withIntersectionObserver) sandbox.IntersectionObserver = TestObserver;
   if (typeof ym === 'function') sandbox.ym = ym;
   if (Array.isArray(yandexQueue)) sandbox.yaContextCb = yandexQueue;
-  if (withYandex) sandbox.Ya = { Context: { AdvManager: { render: render || defaultRender } } };
+  if (withYandex) sandbox.Ya = { Context: { AdvManager: {
+    render: render || defaultRender,
+    renderWidget: renderWidget || defaultWidget
+  } } };
   sandbox.window = sandbox;
   vm.runInNewContext(source, sandbox, { filename: 'nanofox.js' });
-  return { sandbox, document, slots, callbacks, renders };
+  return { sandbox, document, slots, callbacks, renders, widgetRenders };
 }
 
 test('1. documented Yandex onRender confirms YAN_RENDERED; late no-fill cannot add fallback', () => {
@@ -506,4 +521,112 @@ test('weighted choice honors 70/30 boundaries over independent selections', () =
     if (choose(record).id === 'a') a += 1;
   }
   assert.equal(a, 7000);
+});
+
+test('lazy NanoFox slot waits for the configured viewport observer before one request', () => {
+  const config = baseConfig();
+  config.lazy = { enabled: true, rootMargin: '300px' };
+  const env = boot({ config });
+  assert.equal(env.renders.length, 0);
+  const lazyObserver = TestObserver.instances.at(-1);
+  lazyObserver.fire(env.slots[0]);
+  assert.equal(env.renders.length, 1);
+  lazyObserver.fire(env.slots[0]);
+  assert.equal(env.renders.length, 1);
+});
+
+test('refresh lazily initializes a dynamically inserted slot without duplicating it', () => {
+  const config = baseConfig();
+  config.lazy = { enabled: true, rootMargin: '200px' };
+  const first = new Element('div', { 'data-nanofox': 'article' });
+  const env = boot({ config, slots: [first] });
+  const second = new Element('div', { 'data-nanofox': 'article' });
+  env.slots.push(second);
+  env.sandbox.NanoFox.refresh(env.document);
+  env.sandbox.NanoFox.refresh(env.document);
+  TestObserver.instances.at(-2).fire(first);
+  TestObserver.instances.at(-1).fire(second);
+  assert.equal(env.renders.length, 2);
+});
+
+test('mapped legacy lazy markup can use the documented NanoFox render path after it becomes near', () => {
+  const config = baseConfig();
+  config.legacy = {
+    enabled: true,
+    selector: '.lazy-ad[data-block-id]',
+    rootMargin: '200px',
+    slots: { 'R-A-TEST-1': 'article' }
+  };
+  const slot = new Element('div', { class: 'lazy-ad', 'data-block-id': 'R-A-TEST-1' });
+  const env = boot({ config, slots: [slot] });
+  assert.equal(env.renders.length, 0);
+  TestObserver.instances.at(-1).fire(slot);
+  assert.equal(env.renders.length, 1);
+  env.callbacks[0]();
+  assert.ok(imageIn(slot));
+});
+
+test('unmapped legacy markup preserves a Yandex-only lazy widget path when NanoFox is disabled', () => {
+  const config = baseConfig({ enabled: false });
+  config.legacy = { enabled: true, selector: '.lazy-ad[data-block-id]', rootMargin: '200px', slots: {} };
+  const slot = new Element('div', { class: 'lazy-ad', 'data-block-id': 'R-A-LEGACY-1' });
+  const env = boot({ config, slots: [slot] });
+  assert.equal(env.widgetRenders.length, 0);
+  TestObserver.instances.at(-1).fire(slot);
+  assert.equal(env.widgetRenders.length, 1);
+  assert.equal(imageIn(slot), null);
+});
+
+test('legacy special formats are skipped unless an explicit separate owner is provided', () => {
+  const config = baseConfig();
+  config.legacy = {
+    enabled: true,
+    selector: '.lazy-ad[data-block-id]',
+    slots: {},
+    excludedBlockIds: ['R-A-SPECIAL-1']
+  };
+  const slot = new Element('div', { class: 'lazy-ad', 'data-block-id': 'R-A-SPECIAL-1' });
+  const env = boot({ config, slots: [slot], withIntersectionObserver: false });
+  assert.equal(env.widgetRenders.length, 0);
+  assert.equal(env.sandbox.NanoFox.getState(slot), 'SKIPPED');
+});
+
+test('legacy Yandex-only markup accepts a loader that exposes renderWidget without render', () => {
+  const config = baseConfig({ enabled: false });
+  config.legacy = { enabled: true, selector: '.lazy-ad[data-block-id]', slots: {} };
+  const slot = new Element('div', { class: 'lazy-ad', 'data-block-id': 'R-A-WIDGET-1' });
+  const queue = [];
+  const env = boot({ config, slots: [slot], withYandex: false, yandexQueue: queue, withIntersectionObserver: false });
+  assert.equal(queue.length, 1);
+  const calls = [];
+  env.sandbox.Ya = { Context: { AdvManager: { renderWidget: (options) => calls.push(options) } } };
+  queue.shift()();
+  assert.equal(calls.length, 1);
+  assert.equal(env.sandbox.NanoFox.getState(slot), 'DONE');
+});
+
+test('a 300×250 fallback is valid and centered in a wider responsive slot without reserving desktop width', () => {
+  const config = treatmentConfig();
+  config.sites['example.test'].slots.article = {
+    yandex: 'R-A-RESPONSIVE-1',
+    fallbackMaxWidth: 798,
+    fallbackMaxHeight: 250,
+    reserveHeight: 250,
+    fallbackAlign: 'center',
+    fallback: ['a']
+  };
+  config.campaigns.b.enabled = false;
+  const env = boot({ config, random: () => 0 });
+  assert.equal(env.slots[0].style.minWidth, undefined);
+  assert.equal(env.slots[0].style.minHeight, '250px');
+  env.callbacks[0]();
+  const wrapper = env.slots[0].children[1];
+  const link = wrapper.children[1];
+  const image = imageIn(env.slots[0]);
+  assert.equal(image.width, 300);
+  assert.equal(image.height, 250);
+  assert.equal(wrapper.style.textAlign, 'center');
+  assert.equal(link.style.display, 'inline-block');
+  assert.equal(image.style.maxWidth, '100%');
+  assert.equal(image.style.height, 'auto');
 });

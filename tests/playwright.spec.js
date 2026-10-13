@@ -27,6 +27,13 @@ function fixturePage() {
     </script></body></html>`;
 }
 
+function legacyFixturePage() {
+  return `<!doctype html><html><head><meta charset="utf-8">
+    <script src="/nanofox.js" defer></script>
+  </head><body><main><div id="legacy-article" class="lazy-ad" data-block-id="R-A-TEST-1"></div></main>
+  </body></html>`;
+}
+
 test.beforeAll(async () => {
   server = http.createServer((request, response) => {
     if (request.url === '/nanofox.js') {
@@ -49,6 +56,11 @@ test.beforeAll(async () => {
         </script>`);
       return;
     }
+    if (request.url === '/legacy.html') {
+      response.writeHead(200, { 'content-type': 'text/html' });
+      response.end(legacyFixturePage());
+      return;
+    }
     response.writeHead(200, { 'content-type': 'text/html' });
     response.end(fixturePage());
   });
@@ -58,8 +70,8 @@ test.beforeAll(async () => {
 
 test.afterAll(async () => new Promise((resolve) => server.close(resolve)));
 
-async function installMock(page, enabled = true) {
-  await page.addInitScript(({ enabled: isEnabled }) => {
+async function installMock(page, enabled = true, lazy = false, legacy = false) {
+  await page.addInitScript(({ enabled: isEnabled, lazy: lazyEnabled, legacy: legacyEnabled }) => {
     window.__callbacks = [];
     window.__yandexCalls = [];
     window.Ya = { Context: { AdvManager: { render(options, noFill) {
@@ -69,6 +81,11 @@ async function installMock(page, enabled = true) {
     window.__NANOFOX_TEST_CONFIG__ = {
       enabled: isEnabled,
       experiment: { enabled: false, id: 'pw-v1', control: 50, treatment: 50 },
+      lazy: { enabled: lazyEnabled, rootMargin: '200px' },
+      legacy: legacyEnabled ? {
+        enabled: true, selector: '.lazy-ad[data-block-id]', rootMargin: '200px',
+        slots: { 'R-A-TEST-1': 'article' }
+      } : { enabled: false },
       sites: { '127.0.0.1': { enabled: true, slots: {
         article: { yandex: 'R-A-TEST-1', width: 320, height: 50, fallback: ['local'] }
       } } },
@@ -79,7 +96,7 @@ async function installMock(page, enabled = true) {
       } },
       analytics: { enabled: false, provider: 'metrika', counterId: null }
     };
-  }, { enabled });
+  }, { enabled, lazy, legacy });
 }
 
 test('desktop: mock no-fill yields one fallback and duplicate script/refresh make one YAN call', async ({ page }) => {
@@ -100,6 +117,42 @@ test('desktop: a delayed Yandex decision remains pending and does not trigger a 
   expect(await page.evaluate(() => window.__yandexCalls.length)).toBe(1);
   await expect(page.locator('#article img')).toHaveCount(0);
   expect(await page.evaluate(() => window.NanoFox.getState(document.getElementById('article')))).toBe('REQUESTING');
+});
+
+test('desktop: lazy mode waits for the viewport observer and still requests only once', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.__lazyObservers = [];
+    window.IntersectionObserver = class {
+      constructor(callback) { this.callback = callback; window.__lazyObservers.push(this); }
+      observe(target) { this.target = target; }
+      unobserve() {}
+      disconnect() {}
+      fire() { this.callback([{ target: this.target, isIntersecting: true }], this); }
+    };
+  });
+  await installMock(page, true, true);
+  await page.goto(origin + '/lazy.html');
+  expect(await page.evaluate(() => window.__yandexCalls.length)).toBe(0);
+  await page.evaluate(() => { window.__lazyObservers[0].fire(); window.__lazyObservers[0].fire(); });
+  expect(await page.evaluate(() => window.__yandexCalls.length)).toBe(1);
+});
+
+test('desktop: compatible legacy lazy markup waits and is owned only once', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.__lazyObservers = [];
+    window.IntersectionObserver = class {
+      constructor(callback) { this.callback = callback; window.__lazyObservers.push(this); }
+      observe(target) { this.target = target; }
+      unobserve() {}
+      disconnect() {}
+      fire() { this.callback([{ target: this.target, isIntersecting: true }], this); }
+    };
+  });
+  await installMock(page, true, false, true);
+  await page.goto(origin + '/legacy.html');
+  expect(await page.evaluate(() => window.__yandexCalls.length)).toBe(0);
+  await page.evaluate(() => { window.__lazyObservers[0].fire(); window.NanoFox.refresh(); });
+  expect(await page.evaluate(() => window.__yandexCalls.length)).toBe(1);
 });
 
 test('mobile: fallback reserves and renders the configured 320×50 creative', async ({ page }) => {

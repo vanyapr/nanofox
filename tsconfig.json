@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "target": "ES5",
+    "lib": ["ES5", "DOM"],
+    "strict": true,
+    "noEmitOnError": true,
+    "module": "none",
+    "moduleDetection": "legacy",
+    "skipLibCheck": true,
+    "sourceMap": false,
+    "declaration": false,
+    "newLine": "lf"
+  },
+  "files": ["nanofox.ts"]
+}

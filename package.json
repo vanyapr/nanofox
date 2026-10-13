@@ -1,0 +1,14 @@
+{
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "check:artifact": "node scripts/check-artifact.mjs",
+    "check:es5": "node scripts/check-es5-compat.mjs",
+    "test:unit": "node --test tests/nanofox.test.js",
+    "test": "npm run typecheck && npm run check:artifact && npm run check:es5 && npm run test:unit",
+    "test:browser": "npx --yes -p @playwright/test@1.64.0 playwright test tests/playwright.spec.js"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3"
+  }
+}

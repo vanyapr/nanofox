@@ -4,6 +4,13 @@ NanoFox is a compact self-hosted JavaScript waterfall for ordinary inline ad
 slots. Production needs one file, `nanofox.js`; it has no runtime dependencies,
 backend, database, build step, API, admin panel, or standalone CSS.
 
+`nanofox.ts` is strictly type-checked and compiled into the checked-in ES5
+artifact `nanofox.js`. TypeScript is development-only; production loads the
+single ready JS file. The target deliberately requires no `Map`, `Set`,
+`WeakMap`, `Promise`, `URL`, or polyfill. `IntersectionObserver`,
+`MutationObserver`, `CustomEvent`, and `localStorage` are feature-detected and
+have documented fail-open behaviour.
+
 ## Boundaries
 
 - Yandex Advertising Network (YAN) is requested first through the existing
@@ -17,6 +24,9 @@ backend, database, build step, API, admin panel, or standalone CSS.
   call the normal renderer when NanoFox is missing or disabled.
 - NanoFox uses no cookies, fingerprinting, user IDs, personal profiles, or
   proprietary network analytics.
+- When enabled, lazy initialization waits for `IntersectionObserver` and a
+  configured `rootMargin`; without that API it safely starts once immediately,
+  with neither a polyfill nor DOM polling.
 
 ## Configuration
 
@@ -29,6 +39,21 @@ campaign must be an enabled `image` with safe HTTPS or root-relative URLs,
 matching dimensions, and a positive `weight`. Unsafe, incompatible, or disabled
 campaigns are excluded.
 
+For a responsive container, explicit `fallbackMaxWidth` / `fallbackMaxHeight`
+and `reserveHeight` may replace width equality: a banner no larger than the
+declared bounds is centered with `max-width:100%`, while height reservation
+reduces CLS without imposing a desktop `min-width` on mobile. Without max
+fields, the historical strict `slot.width×height == campaign.width×height`
+contract remains.
+
+`lazy` supplies `enabled` and `rootMargin`. Optional `legacy` supports only a
+verified `.lazy-ad[data-block-id]` / `data-block-id` / `yaContextCb` /
+`renderWidget()` contract: an explicit `legacy.slots` mapping from block ID to
+an ordinary NanoFox slot moves that place to documented `render()` and may
+enable fallback. Unmapped places remain Yandex-only. Special top/overlay/floor/
+video/A-B formats belong in `excludedBlockIds` or retain another owner; a
+universal loader replacement is not claimed.
+
 ## States and resilience
 
 `IDLE → REQUESTING → NO_FILL → FALLBACK_RENDERED → DONE`; documented `onRender`
@@ -39,6 +64,11 @@ When the YAN API is still loading but `window.yaContextCb` exists, NanoFox
 queues one call. When neither API nor queue is available, it records `UNKNOWN`
 without fallback. `onError` records `ERROR` without fallback. Exceptions are
 isolated per slot; polling, no-fill timeouts, and retry loops are prohibited.
+
+Without `MutationObserver`, delivery still works: an image error releases its
+reservation, while a pending wrapper removed by unrelated code can remain
+reserved for that page. NanoFox intentionally does not add polling for this
+rare legacy edge case.
 
 ## Fallback rotation
 
@@ -81,5 +111,8 @@ production enablement.
 
 Unit tests mock YAN and cover no-fill, errors, A/B, idempotency, storage
 fallback, visibility, rotation cycle/reload, reservations, image error,
-removal, eligibility, and URL safety. Playwright fixtures use only a local mock
-and never request a real ad. Production deployment needs separate approval.
+removal, eligibility, URL safety, lazy above/below-viewport behaviour, dynamic
+slots, and the legacy adapter. Playwright fixtures use only a local mock and
+never request a real ad. `npm run typecheck`, `npm run check:artifact`, and
+`npm run check:es5` verify strict source, artifact freshness, and the absence
+of unpolyfilled ES2015 APIs. Production deployment needs separate approval.
